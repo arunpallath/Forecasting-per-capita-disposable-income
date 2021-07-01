@@ -1,0 +1,184 @@
+---
+title: "Forecasting per capita disposable income"
+author: "Arun Pallath"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# {.tabset .tabset-fade .tabset-pills}
+
+## INTRODUCTION
+
+The data set income contains the quarterly disposable income in Japan during the period of 1961 through 1982.
+
+Loading the packages:
+```{r,message= FALSE,warning=FALSE}
+#loading required packages
+library(forecast)
+library(TSA)
+library(tidyverse)
+library(tseries)
+library(lmtest)
+```
+
+Let us first import the data- "income.csv".The data needs to converted into a time series .Let us have a look at the top rows of the time series data.
+```{r}
+#importing data and converting into time series with only required observations
+income <- read.csv("C:/Users/arunp/Desktop/UC/ACADEMICS/PROJECTS/income.csv",header = TRUE)
+income <- ts(income[1:80,],frequency=4)
+head(income,20)
+```
+
+## DATA TRANSFORMATION
+
+Plotting the time series and corresponding ACF and PACF:
+```{r}
+#plotting data
+income %>% ggtsdisplay()
+```
+
+We can observe from the data that the variance is not constant. We can see an increasing pattern in the variance as the time goes on.To take care of this non constant variance , we can perform transformation to the data. A Box-Cox test can help us to find out the transformation parameter lambda and decide on which transformation to perform.
+
+```{r}
+(lambda <- BoxCox.lambda(income))
+```
+
+We have got a lambda value of 0.18 which suggests that a log transformation on the data would give us a better idea.
+Let us plot the transformed data and check for acf and pacf.
+```{r}
+income %>% log() %>% ggtsdisplay()
+```
+
+The plot shows that the variance shows a constant distribution but let us check for the stationarity of the series by performing an adf test
+```{r}
+income %>% log() %>% adf.test()
+```
+
+For an ADF test the NULL hypothesis says: The series is non - stationary and the alternative hypothesis is that the series is stationary.Here, the p- value of ADF test gives a value of 0.85 which is more than the critical value of 0.05 which means that we do not have sufficient evidence to reject the NULL hypothesis.Hence, the series is not stationary.
+
+To take care of this non-stationarity, we need to perform a differencing.
+```{r}
+income %>% log() %>% diff() %>% ggtsdisplay()
+```
+
+After differencing, the series looks more stationary but let us confirm this by performing an adf test again.
+```{r}
+income %>% log() %>% diff() %>% adf.test()
+```
+
+ADF test confirms our understanding that the series has become stationary now.
+
+But, the ACF and PACF of the series clearly shows a seasonal behaviour at lag 4. To take this seasonality into account, we have to perform a seasonal differencing at lag 4.
+```{r}
+#Seasonal Differencing
+income_1 <- income %>% log() %>% diff() %>% diff(lag = 4)
+income_1 %>% ggtsdisplay
+```
+
+The plot, ACF and PACF shows a better output now. Let us also confirm the stationarity of the series after performing seasonal differencing.
+
+```{r}
+#ADF
+income_1 %>% adf.test()
+```
+
+ADF tests confirms the stationarity of the series. Now, let us move towards identifying the correct model.
+
+## MODEL IDENTIFICATION
+
+Observing the acf and pacf, we can find a spike at lag 1 in the acf which cuts off afterwards.This suggests a non-seasonal MA(1). Also, there is a significant spike at lag 4 in the pacf which cuts off afterwards.This suggests a seasonal AR(1).Therefore, we fit a ARIMA(0,0,1)(1,0,0)[4] to the both seasonally and nonseasonally differenced series.
+```{r}
+(income_fit1 <- income_1 %>% 
+    Arima(order=c(0,0,1), seasonal=c(1,0,0),include.constant = FALSE ))
+```
+
+We can see that the model generates an AIC value of -139.44 and a BIC value of -132.49
+Let us compare this model with other models by increasing p and q by 1 and then checking the AIC and BIC values of those models.
+```{r}
+(income_fit2 <- income_1 %>% 
+    Arima(order=c(0,0,2), seasonal=c(1,0,0),include.constant = FALSE ))
+
+(income_fit3 <- income_1 %>% 
+    Arima(order=c(1,0,1), seasonal=c(1,0,0),include.constant = FALSE ))
+```
+
+We can notice that our first fitted model(model: income_fit1) has lesser AIC and BIC values than the other two models.Thus, we can infer that our fitted model performs better.
+We can also check whether the estimated coefficients of the overfitted models are significant.
+```{r}
+coeftest(income_fit1)
+coeftest(income_fit2)
+coeftest(income_fit3)
+```
+
+We can find that the MA(1) and seasonal AR(1) coeffiecient in our model 1(income_fit1) is significant. We can also find that MA(2) coefficient in model 2(income_fit2) and the AR(1) coefficient in model 3(income_fit3) are not significant. Also, the MA(1) coefficients do not vary much. So, we can conclude that our model is not overfitted. 
+
+So, the final model we found is equivalent to SARIMA(0,1,1)(1,1,0)[4] with a log transformation.
+```{r}
+(income_fit <- Arima(income, order=c(0,1,1), seasonal=c(1,1,0),include.constant = FALSE,lambda=0))
+```
+
+Let us check for the suggestion from auto.arima function.
+```{r}
+#auto.arima
+auto.arima(log(income))
+```
+
+It suggests a ARIMA(2,0,0)(1,1,0)[4] model but we have seen a non stationarity in the series and have included a differencing in the non seasonal part to take care of this. Even though our model is slightly different from the auto arima suggestion, we have taken care of non stationarity also. We will continue with the model we found out.
+
+Now, let us perform residual diagnostics on the model.
+
+## RESIDUAL DIAGNOSTICS
+
+To be sure that the predictive model cannot be improved upon, it is also a good idea to check whether the residuals are normally distributed with mean zero and constant variance. 
+To check whether the residuals have constant variance, we can make a time plot of the in-sample residuals:
+```{r}
+checkresiduals(income_fit1)
+```
+The plot shows that the in-sample residuals seem to have roughly constant variance over time.
+The histogram shows that the residuals are normally distributed with a mean close to zero. 
+Here the Ljung-Box test statistic is 5.4119, and the p-value is 0.4922.The Null hypothesis is that there is no autocorrelation between the residuals, or the residuals are independent. As we got a p-value which is greater than the critical value of 0.05,we cannot reject the Null hypothesis. So, our in-sample residuals are independent and they act as a white noise.
+
+## FORECASTING
+
+Now, lets us perform forecasting as required for the next four quarterts.
+
+```{r}
+income_fit %>% forecast(h = 4)
+```
+
+We can observe the forecasted values from the above output. Let us plot the forecasting plot.
+```{r}
+income_fit %>% forecast(h = 4) %>% autoplot()
+```
+
+## COMPARISON AND EQUATION
+
+We can now compare the forecasted values with the actual values provided in the data. The values are as provided in the below table:
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+library(knitr)
+library(kableExtra)
+variable_dict <- read.csv("C:/Users/arunp/Desktop/UC/ACADEMICS/SEMESTER 1/7025-DATA WRANGLING/MIDTERM PROJECT/ACCURACY.csv")
+variable_dict%>% kable() %>% kable_styling(bootstrap_options = c("striped", "condensed", "responsive"), full_width = F)
+```
+We can see that the forecasted and actual values do not vary much as the error terms are very minimal. Thus, we can confirm that our model is a good fit.
+
+We will now find out the equation for our final model.
+
+```{r}
+coeftest(income_fit)
+```
+
+As per the output , we can write our final model equation as :
+
+*(1-B) (1-B^4) X_{t} = -0.32 X_{t-4}  + a_{t} + 0.68 a_{t-1}* 
+
+*(1-B) (1-B^4) X_{t} =   X_{t} - X_{t-4} - X_{t-1} + X_{t-5}*
+
+*X_{t} - X_{t-4} - X_{t-1} + X_{t-5}= -0.32 X_{t-4}  + a_{t} + 0.68 a_{t-1}*  
+
+
+**X_{t}  =   X_{t-1} -  X_{t-5} + 0.68 * X_{t-4}  + a_{t} + 0.68 * a_{t-1}**
